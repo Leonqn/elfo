@@ -6,6 +6,7 @@ members = [
     "elfo-macros",
     "elfo-test",
     "elfo-configurer",
+    "elfo-inspector",
     "elfo-logger",
     "elfo-dumper",
     "elfo-telemeter",

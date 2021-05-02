@@ -20,6 +20,9 @@ pub use elfo_telemeter as telemeter;
 #[cfg_attr(docsrs, doc(cfg(feature = "test-util")))]
 pub use elfo_test as test;
 
+#[cfg(feature = "elfo-inspector")]
+pub use elfo_inspector as inspector;
+
 pub mod prelude {
     pub use super::{assert_msg, assert_msg_eq, message, msg, ActorGroup, Context, Schema};
 }
