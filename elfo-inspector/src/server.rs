@@ -1,6 +1,6 @@
 use std::convert::AsRef;
 
-use elfo::Context;
+use elfo::{stream::Stream, Context};
 use elfo_core as elfo;
 use futures::{Stream, StreamExt};
 use tokio::{runtime::Handle, sync::mpsc::Receiver};
@@ -24,8 +24,8 @@ pub(crate) struct InspectorServer {
 }
 
 impl InspectorServer {
-    pub(crate) fn new(config: &Config, ctx: Context) -> Self {
-        Self {
+    pub(crate) fn new(config: &Config, ctx: Context) -> () {
+        Stream::new( {
             config: config.clone(),
             ctx,
         }
@@ -38,7 +38,7 @@ impl InspectorServer {
             .and(warp::get())
             //.and(auth_token)
             .map(move || {
-                // debug!(?auth_token, "token");
+                debug!("request");
                 warp::sse::reply(request(
                     ctx.clone(),
                     //"".clone().into(),
