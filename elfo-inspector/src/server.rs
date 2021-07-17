@@ -5,7 +5,7 @@ use elfo_core as elfo;
 use futures::{Stream, StreamExt};
 use tokio::{runtime::Handle, sync::mpsc::Receiver};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use warp::{
     sse::{self},
     Filter,
@@ -33,12 +33,17 @@ impl InspectorServer {
 
     pub(crate) async fn exec(self) {
         let ctx = self.ctx.clone();
-        let auth_token = warp::header::<Token>("auth-token");
+        // let auth_token = warp::header::<Token>("auth-token");
         let routes = warp::path!("api" / "v1" / "topology")
             .and(warp::get())
-            .and(auth_token)
-            .map(move |auth_token| {
-                warp::sse::reply(request(ctx.clone(), auth_token, RequestBody::GetTopology))
+            //.and(auth_token)
+            .map(move || {
+                // debug!(?auth_token, "token");
+                warp::sse::reply(request(
+                    ctx.clone(),
+                    //"".clone().into(),
+                    RequestBody::GetTopology,
+                ))
             });
         warp::serve(routes)
             .run((self.config.ip, self.config.port))
@@ -48,10 +53,10 @@ impl InspectorServer {
 
 fn request(
     ctx: Context,
-    auth_token: Token,
+    // auth_token: Token,
     body: RequestBody,
 ) -> impl Stream<Item = Result<sse::Event, UpdateError>> {
-    let (req, rx): (Request, Receiver<UpdateResult>) = Request::new(auth_token, body);
+    let (req, rx): (Request, Receiver<UpdateResult>) = Request::new(body);
     let tx = req.tx().clone();
     if ctx.try_send_to(ctx.addr(), req).is_err() {
         if let Err(err) = Handle::current().block_on(tx.send(Err(UpdateError::TooManyRequests))) {

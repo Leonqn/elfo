@@ -47,5 +47,5 @@ port = 9237
 # Tokens should be long enough to be brute-force-proof.
 # Generate new random tokens by hand or with this shell command:
 # cat /dev/urandom | head -c32 | base64
-auth_tokens = []
+auth_tokens = ["foobar"]
 update_period = "100ms"

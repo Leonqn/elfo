@@ -32,7 +32,7 @@ pub(crate) struct Config {
 
 #[message(elfo = elfo_core)]
 pub(crate) struct Request {
-    token: Token,
+    // token: Token,
     tx: Local<Sender<UpdateResult>>,
     pub(crate) body: RequestBody,
 }
@@ -69,12 +69,11 @@ fn parallel_requests_max_default() -> usize {
 }
 
 impl Request {
-    pub(crate) fn new(token: Token, body: RequestBody) -> (Self, Receiver<UpdateResult>) {
+    pub(crate) fn new(body: RequestBody) -> (Self, Receiver<UpdateResult>) {
         let (tx, rx) = channel(CHANNEL_SIZE);
         (
             Self {
                 body,
-                token,
                 tx: Local::new(tx),
             },
             rx,
