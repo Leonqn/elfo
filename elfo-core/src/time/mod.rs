@@ -35,7 +35,11 @@ impl Timestamp {
     /// Use `pause`, `advance` and `resume` to control returned values
     /// if the `test-util` feature is enabled.
     pub fn now() -> Timestamp {
-        clock::now()
+        // clock::now()
+        let duration = std::time::UNIX_EPOCH
+            .elapsed()
+            .expect("invalid system time");
+        Timestamp(duration.as_nanos() as u64)
     }
 
     #[inline]

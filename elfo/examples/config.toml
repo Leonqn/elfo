@@ -6,7 +6,7 @@
 #format.with_module = true
 
 [system.dumpers]
-path = "example.dump"
+path = "dumps/example.dump"
 
 [producers]
 group_count = 3

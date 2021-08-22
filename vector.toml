@@ -1,0 +1,39 @@
+[sources.platform_dumps]
+type = "file"
+include = ["/dumps/*.dump"]
+
+[transforms.prepare_dumps]
+type = "remap"
+inputs = ["platform_dumps"]
+source = '''
+raw = parse_json!(.message)
+. = {}
+.actor_group = raw.g
+.actor_key = raw.k
+.node_no = raw.n
+.sequence_no = raw.s
+.trace_id = raw.t
+.platform_time = raw.ts
+.direction = raw.d
+.class = raw.cl
+.message_name = raw.mn
+.message_protocol = raw.mp
+.message_kind = raw.mk
+.message = encode_json(raw.m)
+.correlation_id = raw.c
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["prepare_dumps"]
+compression = "gzip"
+endpoint = "http://127.0.0.1:8123"
+database = "default"
+table = "dump_log"
+healthcheck.enabled = true
+
+# Batching.
+buffer.type = "memory"
+buffer.when_full = "block"
+buffer.max_events = 1_048_576
+batch.timeout_secs = 10
