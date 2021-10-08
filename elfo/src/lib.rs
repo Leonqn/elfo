@@ -10,6 +10,9 @@ pub use elfo_configurer as configurer;
 #[cfg(feature = "elfo-dumper")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use elfo_dumper as dumper;
+#[cfg(feature = "elfo-eyre")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+pub use elfo_eyre as eyre;
 #[cfg(feature = "elfo-logger")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use elfo_logger as logger;
@@ -22,6 +25,8 @@ pub use elfo_test as test;
 
 pub mod prelude {
     pub use super::{assert_msg, assert_msg_eq, message, msg, ActorGroup, Context, Schema};
+
+    // TODO: reexport from elfo-eyre?
 }
 
 #[deprecated(since = "0.1.1")]

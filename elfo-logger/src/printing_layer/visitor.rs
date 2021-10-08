@@ -74,6 +74,14 @@ impl Visit for Visitor<'_> {
                 break;
             }
         }
+
+        // Error here, because `Report` doesn't implement `Error`.
+        #[cfg(feature = "elfo-eyre")]
+        if let Some(report) = value.downcast_ref::<elfo_eyre::Report>() {
+            if let Some(handler) = report.handler().downcast_ref::<elfo_eyre::Handler>() {
+                // Save a location and stack frames for later.
+            }
+        }
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {

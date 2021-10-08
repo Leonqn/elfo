@@ -10,6 +10,7 @@ license = "MIT"
 elfo-macros = { version = "0.1.9", path = "../elfo-macros" }
 elfo-core = { version = "0.1.19", path = "../elfo-core" }
 elfo-utils = { version = "0.1.1", path = "../elfo-utils" }
+elfo-eyre = { version = "0.1", path = "../elfo-eyre", optional = true }
 
 derive_more = "0.99.11"
 futures-intrusive = "0.4.0"

@@ -11,7 +11,7 @@ use futures_intrusive::{buffer::GrowingHeapBuf, channel::GenericChannel};
 use fxhash::FxBuildHasher;
 use parking_lot::RawMutex;
 use sharded_slab::Pool;
-use tracing::{span::Id as SpanId, Level, Metadata, Subscriber};
+use tracing::{span::Id as SpanId, warn, Level, Metadata, Subscriber};
 use tracing_subscriber::{prelude::*, registry::Registry, EnvFilter};
 
 use elfo_core::{trace_id::TraceId, Schema, _priv::ObjectMeta};
@@ -84,9 +84,24 @@ pub fn init() -> Schema {
         install_subscriber(subscriber);
     };
 
+    #[cfg(feature = "elfo-eyre")]
+    install_eyre_hook();
+
+    // TODO: set a panic hook.
+
     schema
 }
 
 fn install_subscriber(s: impl Subscriber + Send + Sync) {
     tracing::subscriber::set_global_default(s).expect("cannot set global subscriber");
+}
+
+#[cfg(feature = "elfo-eyre")]
+fn install_eyre_hook() {
+    if let Err(err) = elfo_eyre::install() {
+        warn!(
+            error = &err as &dyn std::error::Error,
+            "cannot install eyre hook",
+        );
+    }
 }
