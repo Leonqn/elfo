@@ -12,7 +12,7 @@ use slotmap::{new_key_type, SlotMap};
 use tokio::sync::mpsc::Sender;
 use tracing::error;
 
-use elfo::{time::Timer, ActorGroup, Context, Schema, Topology};
+use elfo::{time::Stopwatch, ActorGroup, Context, Schema, Topology};
 use elfo_core as elfo;
 use elfo_macros::msg_raw as msg;
 
@@ -60,9 +60,9 @@ impl Inspector {
 
     async fn exec(mut self, ctx: Context<Config>) {
         let server = InspectorServer::new(ctx.config(), ctx.pruned());
-        let heartbeat_timer = Timer::new(|| HeartbeatTick);
+        let heartbeat_timer = Stopwatch::new(|| HeartbeatTick);
         let mut ctx = ctx.with(&heartbeat_timer).with(server);
-        while let Some(envelope) = ctx.recv() {
+        while let Some(envelope) = ctx.recv().await {
             msg!(match envelope {
                 req @ Request => {
                     match req.body {
@@ -115,10 +115,10 @@ impl Inspector {
         &mut self,
         update_key: UpdateKey,
         tx: Sender<UpdateResult>,
-        timer: &Timer<F>,
+        timer: &Stopwatch<F>,
     ) -> Result<ListenerKey> {
         if self.listeners.is_empty() {
-            timer.sleep(self.heartbeat_period);
+            timer.schedule_after(self.heartbeat_period);
         }
         let listener = Listener::new(tx, self.heartbeat_period, self.heartbeat_indexes.next());
         let listener_key = self.listeners.insert(listener);
@@ -148,7 +148,7 @@ impl Inspector {
         self.postpone_heartbeat(listener_key)
     }
 
-    fn heartbeat_tick<F: Fn() -> HeartbeatTick>(&mut self, timer: &Timer<F>) -> Result<()> {
+    fn heartbeat_tick<F: Fn() -> HeartbeatTick>(&mut self, timer: &Stopwatch<F>) -> Result<()> {
         let now = Instant::now();
         while let Some((&uid, &listener_key)) = self.heartbeats.iter().next() {
             let listener = if let Some(listener) = self.listeners.get(listener_key) {
@@ -158,7 +158,7 @@ impl Inspector {
                 continue;
             };
             if listener.heartbeat_at > now {
-                timer.reset(listener.heartbeat_at.into());
+                timer.schedule_at(listener.heartbeat_at.into());
                 break;
             }
             self.heartbeats.remove(&uid);

@@ -1,6 +1,7 @@
 use std::convert::AsRef;
 
-use elfo::{stream::Stream, Context};
+//use elfo::stream::Stream;
+use elfo::Context;
 use elfo_core as elfo;
 use futures::{Stream, StreamExt};
 use tokio::{runtime::Handle, sync::mpsc::Receiver};
@@ -24,8 +25,8 @@ pub(crate) struct InspectorServer {
 }
 
 impl InspectorServer {
-    pub(crate) fn new(config: &Config, ctx: Context) -> () {
-        Stream::new( {
+    pub(crate) fn new(config: &Config, ctx: Context) -> Self {
+        Self {
             config: config.clone(),
             ctx,
         }
