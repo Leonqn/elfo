@@ -3,9 +3,15 @@
 use std::{fmt::Debug, net::IpAddr, str::FromStr, time::Duration};
 
 use anyhow::{Error, Result};
+use futures_intrusive::{
+    buffer::GrowingHeapBuf,
+    channel::{
+        shared::{channel, Receiver, Sender, SharedStream},
+        ChannelStream,
+    },
+};
 use serde::{Deserialize, Serialize};
 use smartstring::alias::String;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use elfo::{config::Secret, Local, Topology};
 use elfo_core as elfo;

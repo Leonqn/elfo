@@ -31,6 +31,8 @@ fxhash = "0.2.1"
 priority-queue = "1.1.1"
 slotmap = "1.0.3"
 strum = { version = "0.20.0", features = ["derive"] }
+futures-intrusive = "0.4.0"
+parking_lot = "0.11.2"
 
 [dev-dependencies]
 anyhow = "1.0.40"

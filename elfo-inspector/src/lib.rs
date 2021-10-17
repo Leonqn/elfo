@@ -7,12 +7,19 @@ use std::{
 };
 
 use anyhow::Result;
+use futures::{FutureExt, StreamExt};
+use futures_intrusive::{
+    buffer::GrowingHeapBuf,
+    channel::{
+        shared::{channel, Receiver, Sender, SharedStream},
+        ChannelStream,
+    },
+};
 use priority_queue::PriorityQueue;
 use slotmap::{new_key_type, SlotMap};
-use tokio::sync::mpsc::Sender;
 use tracing::error;
 
-use elfo::{time::Stopwatch, ActorGroup, Context, Schema, Topology};
+use elfo::{stream::Stream, time::Stopwatch, ActorGroup, Context, Schema, Topology};
 use elfo_core as elfo;
 use elfo_macros::msg_raw as msg;
 
@@ -59,41 +66,51 @@ impl Inspector {
     }
 
     async fn exec(mut self, ctx: Context<Config>) {
-        let server = InspectorServer::new(ctx.config(), ctx.pruned());
+        let (requests, execution_handle, server) = InspectorServer::new(ctx.config(), ctx.pruned());
         let heartbeat_timer = Stopwatch::new(|| HeartbeatTick);
-        let mut ctx = ctx.with(&heartbeat_timer).with(server);
-        while let Some(envelope) = ctx.recv().await {
-            msg!(match envelope {
-                req @ Request => {
-                    match req.body {
-                        RequestBody::GetTopology => {
-                            let update: Update = self.topology.clone().into();
-                            let update_key = update.key();
-                            match self.subscribe(update_key, req.tx().clone(), &heartbeat_timer) {
-                                Ok(listener_key) => {
-                                    if let Err(err) = self.send(listener_key, update) {
-                                        error!(?err, "can't send the snapshot to the listener");
+        let mut ctx = ctx.with(&heartbeat_timer).with(Stream::new(requests));
+        let mut execution = execution_handle.into_stream();
+        loop {
+            tokio::select! {
+                result = execution.next() => {
+                    error!(?result, "HTTP server was terminated");
+                    break;
+                },
+                Some(envelope) = ctx.recv() => {
+                    msg!(match envelope {
+                        req @ Request => {
+                            match req.body {
+                                RequestBody::GetTopology => {
+                                    let update: Update = self.topology.clone().into();
+                                    let update_key = update.key();
+                                    match self.subscribe(update_key, req.tx().clone(), &heartbeat_timer) {
+                                        Ok(listener_key) => {
+                                            if let Err(err) = self.send(listener_key, update) {
+                                                error!(?err, "can't send the snapshot to the listener");
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!(?err, "can't subscribe the listener");
+                                        }
                                     }
-                                }
-                                Err(err) => {
-                                    error!(?err, "can't subscribe the listener");
                                 }
                             }
                         }
-                    }
-                }
-                HeartbeatTick => {
-                    if let Err(err) = self.heartbeat_tick(&heartbeat_timer) {
-                        error!("can't handle heartbeat tick");
-                    }
-                }
-                TopologyUpdated => {
-                    if let Err(err) = self.send_to_channel(self.topology.clone().into()) {
-                        error!(?err, "can't send to the channel");
-                    }
-                }
-                _ => {}
-            });
+                        HeartbeatTick => {
+                            if let Err(err) = self.heartbeat_tick(&heartbeat_timer) {
+                                error!("can't handle heartbeat tick");
+                            }
+                        }
+                        TopologyUpdated => {
+                            if let Err(err) = self.send_to_channel(self.topology.clone().into()) {
+                                error!(?err, "can't send to the channel");
+                            }
+                        }
+                        _ => {}
+                    });
+                },
+                else => break,
+            }
         }
     }
 

@@ -1,16 +1,23 @@
-use std::convert::AsRef;
+use std::{convert::AsRef, pin::Pin, task::Poll};
 
-//use elfo::stream::Stream;
-use elfo::Context;
-use elfo_core as elfo;
-use futures::{Stream, StreamExt};
-use tokio::{runtime::Handle, sync::mpsc::Receiver};
-use tokio_stream::wrappers::ReceiverStream;
+use futures::{Future, FutureExt, Stream, StreamExt};
+use futures_intrusive::{
+    buffer::GrowingHeapBuf,
+    channel::{
+        shared::{channel, Receiver, Sender, SharedStream},
+        ChannelStream,
+    },
+};
+use parking_lot::RawMutex;
+use tokio::{runtime::Handle, spawn, task::JoinHandle};
 use tracing::{debug, error, warn};
 use warp::{
     sse::{self},
     Filter,
 };
+
+use elfo::{stream::Stream as ElfoStream, Context, Message};
+use elfo_core as elfo;
 
 use crate::{
     api::{Update, UpdateResult},
@@ -24,31 +31,39 @@ pub(crate) struct InspectorServer {
     ctx: Context,
 }
 
-impl InspectorServer {
-    pub(crate) fn new(config: &Config, ctx: Context) -> Self {
-        Self {
-            config: config.clone(),
-            ctx,
-        }
-    }
+const CHANNEL_CAPACITY: usize = 32;
 
-    pub(crate) async fn exec(self) {
-        let ctx = self.ctx.clone();
-        // let auth_token = warp::header::<Token>("auth-token");
+impl InspectorServer {
+    pub(crate) fn new(
+        config: &Config,
+        ctx: Context,
+    ) -> (
+        SharedStream<RawMutex, Request, GrowingHeapBuf<Request>>,
+        JoinHandle<()>,
+        Self,
+    ) {
+        let (sender, receiver) = channel::<Request>(CHANNEL_CAPACITY);
+        let server_ctx = ctx.clone();
         let routes = warp::path!("api" / "v1" / "topology")
             .and(warp::get())
             //.and(auth_token)
             .map(move || {
                 debug!("request");
                 warp::sse::reply(request(
-                    ctx.clone(),
+                    server_ctx.clone(),
                     //"".clone().into(),
                     RequestBody::GetTopology,
                 ))
             });
-        warp::serve(routes)
-            .run((self.config.ip, self.config.port))
-            .await;
+        let execution = warp::serve(routes).run((config.ip, config.port));
+        (
+            receiver.into_stream(),
+            spawn(execution),
+            Self {
+                config: config.clone(),
+                ctx,
+            },
+        )
     }
 }
 
@@ -65,19 +80,20 @@ fn request(
         }
     }
 
-    ReceiverStream::new(rx).map(move |update_result| -> Result<sse::Event, UpdateError> {
-        update_result
-            .and_then(|update| {
-                let event = sse::Event::default().event(update.as_ref());
-                if matches!(update, Update::Heartbeat) {
-                    Ok(event)
-                } else {
-                    event.json_data(update).map_err(UpdateError::from)
-                }
-            })
-            .map_err(|err| {
-                warn!(?err, "can't handle connection");
-                err
-            })
-    })
+    rx.into_stream()
+        .map(move |update_result| -> Result<sse::Event, UpdateError> {
+            update_result
+                .and_then(|update| {
+                    let event = sse::Event::default().event(update.as_ref());
+                    if matches!(update, Update::Heartbeat) {
+                        Ok(event)
+                    } else {
+                        event.json_data(update).map_err(UpdateError::from)
+                    }
+                })
+                .map_err(|err| {
+                    warn!(?err, "can't handle connection");
+                    err
+                })
+        })
 }

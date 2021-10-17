@@ -3,8 +3,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_intrusive::{
+    buffer::GrowingHeapBuf,
+    channel::{
+        shared::{channel, Receiver, Sender, SharedStream},
+        ChannelStream,
+    },
+};
 use slotmap::{new_key_type, SlotMap};
-use tokio::sync::mpsc::Sender;
 
 use elfo::time::Interval;
 use elfo_core as elfo;

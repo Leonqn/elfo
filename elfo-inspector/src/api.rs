@@ -15,7 +15,7 @@ use elfo_macros::message;
 
 use crate::values::{Addr, TopologyActorGroup, TopologyConnection, UpdateError};
 
-type Timestamp = f64;
+type Timestamp = u64;
 pub(crate) type UpdateResult = Result<Update, UpdateError>;
 
 #[message(part, elfo = elfo_core)]
