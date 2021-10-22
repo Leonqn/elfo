@@ -9,62 +9,64 @@ use futures_intrusive::{
     },
 };
 use parking_lot::RawMutex;
-use tokio::{runtime::Handle, spawn, task::JoinHandle};
+use tokio::{runtime::Handle, task::JoinHandle};
 use tracing::{debug, error, warn};
 use warp::{
     sse::{self},
     Filter,
 };
 
-use elfo::{stream::Stream as ElfoStream, Context, Message};
+use elfo::{scope, stream::Stream as ElfoStream, trace_id, Context, Local, Message};
 use elfo_core as elfo;
 
 use crate::{
     api::{Update, UpdateResult},
-    protocol::{Config, Request, RequestBody, Token},
+    protocol::{Config, Request, RequestBody, ServerFailed, Token},
     values::UpdateError,
 };
 
 #[derive(Clone)]
-pub(crate) struct InspectorServer {
+struct InspectorServer {
     config: Config,
     ctx: Context,
 }
 
 const CHANNEL_CAPACITY: usize = 32;
 
-impl InspectorServer {
-    pub(crate) fn new(
-        config: &Config,
-        ctx: Context,
-    ) -> (
-        SharedStream<RawMutex, Request, GrowingHeapBuf<Request>>,
-        JoinHandle<()>,
-        Self,
-    ) {
-        let (sender, receiver) = channel::<Request>(CHANNEL_CAPACITY);
-        let server_ctx = ctx.clone();
-        let routes = warp::path!("api" / "v1" / "topology")
-            .and(warp::get())
-            //.and(auth_token)
-            .map(move || {
-                debug!("request");
-                warp::sse::reply(request(
-                    server_ctx.clone(),
-                    //"".clone().into(),
-                    RequestBody::GetTopology,
-                ))
-            });
-        let execution = warp::serve(routes).run((config.ip, config.port));
-        (
-            receiver.into_stream(),
-            spawn(execution),
-            Self {
-                config: config.clone(),
-                ctx,
-            },
-        )
-    }
+pub(crate) fn start(ctx: &Context<Config>) -> JoinHandle<()> {
+    let ctx = ctx.clone();
+    let scope = scope::expose();
+    let scope1 = scope.clone();
+    let routes = warp::path!("api" / "v1" / "topology")
+        .and(warp::get())
+        //.and(auth_token)
+        .map(move || {
+            let ctx = ctx.clone();
+            let scope = scope.clone();
+            debug!("request");
+
+            let notify = move || request(ctx.pruned(), RequestBody::GetTopology);
+
+            // let output = ctx.request();
+            let response = scope.sync_within(notify);
+            warp::sse::reply(response)
+        });
+    let config = ctx.config();
+
+    let serving = async move {
+        warp::serve(routes).run((config.ip, config.port));
+    };
+
+    tokio::spawn(async move {
+        serving.await;
+        let scope = scope1.clone();
+        let report = async {
+            let _ = ctx.send(ServerFailed).await;
+        };
+
+        scope.set_trace_id(trace_id::generate());
+        scope.within(report).await
+    })
 }
 
 fn request(

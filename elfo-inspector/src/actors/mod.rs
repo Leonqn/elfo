@@ -1,0 +1,197 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use anyhow::Result;
+use futures::{FutureExt, StreamExt};
+use futures_intrusive::{
+    buffer::GrowingHeapBuf,
+    channel::{
+        shared::{channel, Receiver, Sender, SharedStream},
+        ChannelStream,
+    },
+};
+use priority_queue::PriorityQueue;
+use slotmap::{new_key_type, SlotMap};
+use tracing::error;
+
+use elfo::{stream::Stream, time::Stopwatch, ActorGroup, Context, Schema, Topology};
+use elfo_core as elfo;
+use elfo_macros::msg_raw as msg;
+
+mod server;
+
+use crate::{
+    api::{Update, UpdateKey, UpdateResult},
+    channel::Channel,
+    protocol::{Config, HeartbeatTick, Request, RequestBody, TopologyUpdated},
+    values::{InspectorError, Listener, ListenerKey, Uid, UidGenerator},
+};
+
+pub(crate) struct Inspector {
+    channels: BTreeMap<UpdateKey, Channel>,
+    heartbeat_indexes: UidGenerator,
+    heartbeat_period: Duration,
+    heartbeats: BTreeMap<Uid, ListenerKey>,
+    listeners: SlotMap<ListenerKey, Listener>,
+    topology: Topology,
+}
+
+impl Inspector {
+    pub(crate) fn new(ctx: &Context<Config>, topology: Topology) -> Self {
+        Self {
+            channels: BTreeMap::<UpdateKey, Channel>::new(),
+            heartbeat_indexes: Default::default(),
+            heartbeat_period: ctx.config().heartbeat_period,
+            heartbeats: BTreeMap::<Uid, ListenerKey>::new(),
+            listeners: Default::default(),
+            topology,
+        }
+    }
+
+    pub(crate) async fn main(mut self, ctx: Context<Config>) {
+        let serving = server::start(&ctx);
+        let heartbeat_timer = Stopwatch::new(|| HeartbeatTick);
+        let mut ctx = ctx.with(&heartbeat_timer);
+        let mut execution = serving.into_stream();
+        loop {
+            tokio::select! {
+                result = execution.next() => {
+                    error!(?result, "HTTP server was terminated");
+                    break;
+                },
+                Some(envelope) = ctx.recv() => {
+                    msg!(match envelope {
+                        req @ Request => {
+                            match req.body {
+                                RequestBody::GetTopology => {
+                                    let update: Update = self.topology.clone().into();
+                                    let update_key = update.key();
+                                    match self.subscribe(update_key, req.tx().clone(), &heartbeat_timer) {
+                                        Ok(listener_key) => {
+                                            if let Err(err) = self.send(listener_key, update) {
+                                                error!(?err, "can't send the snapshot to the listener");
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!(?err, "can't subscribe the listener");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HeartbeatTick => {
+                            if let Err(err) = self.heartbeat_tick(&heartbeat_timer) {
+                                error!("can't handle heartbeat tick");
+                            }
+                        }
+                        TopologyUpdated => {
+                            if let Err(err) = self.send_to_channel(self.topology.clone().into()) {
+                                error!(?err, "can't send to the channel");
+                            }
+                        }
+                        _ => {}
+                    });
+                },
+                else => break,
+            }
+        }
+    }
+
+    fn send_to_channel(&mut self, update: Update) -> Result<()> {
+        let update_key = update.key();
+        let mut channel = if let Some(channel) = self.channels.get_mut(&update_key) {
+            channel
+        } else {
+            return Err(InspectorError::new("there're no listeners for such updates").into());
+        };
+        if let Err(err) = channel.send(&update, &mut self.listeners) {
+            self.channels.remove(&update_key);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn subscribe<F: Fn() -> HeartbeatTick>(
+        &mut self,
+        update_key: UpdateKey,
+        tx: Sender<UpdateResult>,
+        timer: &Stopwatch<F>,
+    ) -> Result<ListenerKey> {
+        if self.listeners.is_empty() {
+            timer.schedule_after(self.heartbeat_period);
+        }
+        let listener = Listener::new(tx, self.heartbeat_period, self.heartbeat_indexes.next());
+        let listener_key = self.listeners.insert(listener);
+        let mut channel = if let Some(channel) = self.channels.get_mut(&update_key) {
+            channel
+        } else {
+            let channel = Channel::new(self.heartbeat_period);
+            self.channels.insert(update_key, channel);
+            self.channels.get_mut(&update_key).unwrap()
+        };
+        channel.subscribe(listener_key);
+        self.schedule_heartbeat(listener_key)?;
+        Ok(listener_key)
+    }
+
+    fn send(&mut self, listener_key: ListenerKey, update: Update) -> Result<()> {
+        let listener = if let Some(listener) = self.listeners.get(listener_key) {
+            listener
+        } else {
+            return Err(InspectorError::new("there's no such listener").into());
+        };
+        if listener.tx.try_send(Ok(update)).is_err() {
+            self.listeners.remove(listener_key);
+            return Err(InspectorError::new("listener doesn't receive").into());
+        }
+        self.heartbeats.remove(&listener.heartbeat_uid);
+        self.postpone_heartbeat(listener_key)
+    }
+
+    fn heartbeat_tick<F: Fn() -> HeartbeatTick>(&mut self, timer: &Stopwatch<F>) -> Result<()> {
+        let now = Instant::now();
+        while let Some((&uid, &listener_key)) = self.heartbeats.iter().next() {
+            let listener = if let Some(listener) = self.listeners.get(listener_key) {
+                listener
+            } else {
+                self.heartbeats.remove(&uid);
+                continue;
+            };
+            if listener.heartbeat_at > now {
+                timer.schedule_at(listener.heartbeat_at.into());
+                break;
+            }
+            self.heartbeats.remove(&uid);
+            if let Err(err) = self.send(listener_key, Update::Heartbeat) {
+                error!(?err, ?listener_key, "can't send heartbeat")
+            } else if let Err(err) = self.postpone_heartbeat(listener_key) {
+                error!(?err, ?listener_key, "can't postpone heartbeat")
+            }
+        }
+        Ok(())
+    }
+
+    fn postpone_heartbeat(&mut self, listener_key: ListenerKey) -> Result<()> {
+        let listener = if let Some(listener) = self.listeners.get_mut(listener_key) {
+            listener
+        } else {
+            return Err(InspectorError::new("there's no such listener to postpone").into());
+        };
+        listener.heartbeat_at = Instant::now() + self.heartbeat_period;
+        listener.heartbeat_uid = self.heartbeat_indexes.next();
+        self.schedule_heartbeat(listener_key)
+    }
+
+    fn schedule_heartbeat(&mut self, listener_key: ListenerKey) -> Result<()> {
+        let listener = if let Some(listener) = self.listeners.get(listener_key) {
+            listener
+        } else {
+            return Err(InspectorError::new("there's no such listener to schedule").into());
+        };
+        self.heartbeats.insert(listener.heartbeat_uid, listener_key);
+        Ok(())
+    }
+}

@@ -1,6 +1,6 @@
 //! Types to use for cross-task communication.
 
-use std::{fmt::Debug, net::IpAddr, str::FromStr, time::Duration};
+use std::{fmt::Debug, net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{Error, Result};
 use futures_intrusive::{
@@ -42,6 +42,9 @@ pub(crate) struct Request {
     tx: Local<Sender<UpdateResult>>,
     pub(crate) body: RequestBody,
 }
+
+#[message(elfo = elfo_core)]
+pub(crate) struct ServerFailed;
 
 #[message(elfo = elfo_core)]
 pub(crate) struct HeartbeatTick;
