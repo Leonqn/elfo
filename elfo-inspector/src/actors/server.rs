@@ -35,30 +35,28 @@ const CHANNEL_CAPACITY: usize = 32;
 
 pub(crate) fn start(ctx: &Context<Config>) -> JoinHandle<()> {
     let ctx = ctx.clone();
+    let ctx1 = ctx.clone();
     let scope = scope::expose();
     let scope1 = scope.clone();
+    let config = ctx.config();
+    let binding = (config.ip, config.port);
     let routes = warp::path!("api" / "v1" / "topology")
         .and(warp::get())
         //.and(auth_token)
         .map(move || {
-            let ctx = ctx.clone();
-            let scope = scope.clone();
+            let ctx = ctx1.clone();
+            // let scope = scope.clone();
             debug!("request");
 
             let notify = move || request(ctx.pruned(), RequestBody::GetTopology);
 
             // let output = ctx.request();
-            let response = scope.sync_within(notify);
-            warp::sse::reply(response)
+            // let response = scope.sync_within(notify);
+            warp::sse::reply(notify())
         });
-    let config = ctx.config();
-
-    let serving = async move {
-        warp::serve(routes).run((config.ip, config.port));
-    };
 
     tokio::spawn(async move {
-        serving.await;
+        warp::serve(routes).run(binding).await;
         let scope = scope1.clone();
         let report = async {
             let _ = ctx.send(ServerFailed).await;
