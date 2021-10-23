@@ -1,4 +1,9 @@
-use std::{convert::AsRef, pin::Pin, task::Poll};
+use std::{
+    convert::AsRef,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::Poll,
+};
 
 use futures::{Future, FutureExt, Stream, StreamExt};
 use futures_intrusive::{
@@ -37,6 +42,7 @@ pub(crate) fn start(ctx: &Context<Config>) -> JoinHandle<()> {
     let ctx = ctx.clone();
     let ctx1 = ctx.clone();
     let scope = scope::expose();
+
     let scope1 = scope.clone();
     let config = ctx.config();
     let binding = (config.ip, config.port);
@@ -45,14 +51,14 @@ pub(crate) fn start(ctx: &Context<Config>) -> JoinHandle<()> {
         //.and(auth_token)
         .map(move || {
             let ctx = ctx1.clone();
-            // let scope = scope.clone();
+            let scope = scope.clone();
             debug!("request");
 
             let notify = move || request(ctx.pruned(), RequestBody::GetTopology);
 
             // let output = ctx.request();
-            // let response = scope.sync_within(notify);
-            warp::sse::reply(notify())
+            let response = scope.sync_within(notify);
+            warp::sse::reply(response)
         });
 
     tokio::spawn(async move {
@@ -66,6 +72,8 @@ pub(crate) fn start(ctx: &Context<Config>) -> JoinHandle<()> {
         scope.within(report).await
     })
 }
+
+fn foo(_x: impl std::marker::Send) {}
 
 fn request(
     ctx: Context,
