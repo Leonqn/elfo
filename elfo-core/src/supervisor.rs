@@ -308,7 +308,7 @@ where
         let sv = self.clone();
 
         // TODO: protect against panics (for `fn(..) -> impl Future`).
-        let fut = self.exec.exec(ctx);
+        let fut = Box::pin(self.exec.exec(ctx));
 
         // TODO: move to `harness.rs`.
         let fut = async move {
