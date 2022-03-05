@@ -255,8 +255,10 @@ mod reporter {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 // Topology definition with actor groups and connections between them.
-fn topology() -> elfo::Topology {
+fn topology(h: tokio::runtime::Handle) -> elfo::Topology {
     let topology = elfo::Topology::empty();
+
+    topology.add_dedicated_rt(|meta| meta.group == "producers", h);
 
     // Set up logging (based on the `tracing` crate).
     // `elfo` provides a logger actor group to support runtime control.
@@ -310,5 +312,14 @@ fn topology() -> elfo::Topology {
 
 #[tokio::main]
 async fn main() {
-    elfo::start(topology()).await;
+    let ded_rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(move || {
+            println!("!!!!! INSIDE DEDICATED RT");
+        })
+        .build()
+        .unwrap();
+    let h = ded_rt.handle().clone();
+    // ded_rt.shutdown_background();
+    elfo::start(topology(h)).await;
 }

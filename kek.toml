@@ -1,0 +1,29 @@
+[system]
+node_no = 123
+
+[[system.runtimes]]
+name = "default"
+worker_cpus = "3,4,5"
+blocking_cpus = "1-2"
+
+[[system.runtimes]]
+name = "robots"
+worker_cpus = "3,4,5"
+scheduling = "thread_per_actor"
+
+[[system.runtimes]]
+name = "gates"
+worker_cpus = "7-12"
+
+[robots]
+system.run_at = "robots_runtime"
+
+[system.exclusive_runtime]
+cpus = "3,4,5"
+
+[robots]
+system.runtime.use = "robots"
+
+system.thread_per_actor = [817,917]
+
+system.runtime = { kind = "TokioSingleThread" }
