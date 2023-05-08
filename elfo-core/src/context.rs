@@ -2,6 +2,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use futures::{future::poll_fn, pin_mut};
 use once_cell::sync::Lazy;
+use opentelemetry::{baggage::BaggageExt, KeyValue};
 use tracing::{error, info, trace};
 
 use crate::{self as elfo};
@@ -565,7 +566,9 @@ impl<C, K, S> Context<C, K, S> {
         C: 'static,
     {
         self.budget.decrement();
-
+        opentelemetry::trace::get_active_span(|s| {
+            s.set_attribute(KeyValue::new("msg_name", envelope.message().name()))
+        });
         scope::set_trace_id(envelope.trace_id());
 
         let envelope = msg!(match envelope {

@@ -32,6 +32,8 @@ use crate::{
     tracing::TraceId,
 };
 
+pub use measure_poll::{remove_span, set_span};
+
 mod backoff;
 mod error_chain;
 mod measure_poll;
