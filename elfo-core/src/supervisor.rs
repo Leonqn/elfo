@@ -32,7 +32,7 @@ use crate::{
     tracing::TraceId,
 };
 
-pub use measure_poll::{remove_span, set_span};
+pub use measure_poll::{set_trace, take_traces, TraceRecord};
 
 mod backoff;
 mod error_chain;

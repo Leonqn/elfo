@@ -18,7 +18,7 @@ pub use crate::{
     local::{Local, MoveOwnership},
     message::{Message, Request},
     request_table::ResponseToken,
-    supervisor::{remove_span, set_span},
+    supervisor::{set_trace, take_traces, TraceRecord},
     topology::Topology,
 };
 

@@ -6,46 +6,51 @@ use std::{
 };
 
 use arc_swap::ArcSwapOption;
-use fxhash::FxHashMap;
 use metrics::Key;
-use opentelemetry::{
-    global::{self, BoxedTracer},
-    trace::{TraceContextExt, Tracer},
-};
 use parking_lot::Mutex;
 use pin_project::pin_project;
 use quanta::Instant;
+use serde::Serialize;
+use thread_local::ThreadLocal;
 
 #[cfg(feature = "unstable-stuck-detection")]
 use crate::stuck_detection::StuckDetector;
+use crate::ActorMeta;
 
 static BUSY_TIME_SECONDS: Key = Key::from_static_name("elfo_busy_time_seconds");
 static ALLOCATED_BYTES: Key = Key::from_static_name("elfo_allocated_bytes_total");
 static DEALLOCATED_BYTES: Key = Key::from_static_name("elfo_deallocated_bytes_total");
 
-#[derive(Default)]
-struct GroupTrace {
-    span: Option<opentelemetry::Context>,
-    actors_count: usize,
+#[derive(Serialize)]
+pub struct TraceRecord {
+    pub meta: Arc<ActorMeta>,
+    pub start: u64,
+    pub end: u64,
 }
 
-static PARENT_SPAN: ArcSwapOption<(
-    BoxedTracer,
-    opentelemetry::Context,
-    FxHashMap<String, Mutex<GroupTrace>>,
-)> = ArcSwapOption::const_empty();
-
-pub fn set_span(span_name: String, groups: impl Iterator<Item = String>) {
-    let tracer = global::tracer("");
-    let span = opentelemetry::Context::current_with_span(tracer.start(span_name));
-    let groups = groups
-        .map(|group| (group, Default::default()))
-        .collect::<FxHashMap<_, _>>();
-    PARENT_SPAN.store(Some(Arc::new((tracer, span, groups))));
+struct Tracer {
+    traces: ThreadLocal<Mutex<Vec<TraceRecord>>>,
+    now: Instant,
 }
 
-pub fn remove_span() {
-    PARENT_SPAN.store(None);
+static TRACE: ArcSwapOption<Tracer> = ArcSwapOption::const_empty();
+
+pub fn set_trace() {
+    TRACE.store(Some(Arc::new(Tracer {
+        traces: ThreadLocal::new(),
+        now: Instant::now(),
+    })));
+}
+
+pub fn take_traces() -> Option<Vec<TraceRecord>> {
+    let tracer = Arc::try_unwrap(TRACE.swap(None)?).ok()?;
+    Some(
+        tracer
+            .traces
+            .into_iter()
+            .flat_map(|t| t.into_inner())
+            .collect(),
+    )
 }
 
 #[pin_project]
@@ -76,28 +81,9 @@ impl<F: Future> Future for MeasurePoll<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-
-        let span = PARENT_SPAN
-            .load()
-            .as_deref()
-            .and_then(|(tracer, span, groups)| {
-                let meta = crate::scope::meta();
-                let group = groups.get(&meta.group)?;
-                let mut gg = group.lock();
-                if gg.actors_count == 0 {
-                    gg.span = Some(opentelemetry::Context::current_with_span(
-                        tracer.start_with_context(meta.group.clone(), span),
-                    ))
-                }
-                gg.actors_count += 1;
-                let span = tracer
-                    .start_with_context(meta.key.clone(), gg.span.as_ref().expect("must present"));
-                Some(opentelemetry::trace::mark_span_as_active(span))
-            });
-
+        let start = TRACE.load().as_ref().map(|t| t.now.elapsed());
         #[cfg(feature = "unstable-stuck-detection")]
         this.stuck_detector.enter();
-
         let result = if let Some(recorder) = metrics::try_recorder() {
             let start_time = Instant::now();
             let res = this.inner.poll(cx);
@@ -115,19 +101,17 @@ impl<F: Future> Future for MeasurePoll<F> {
 
         #[cfg(feature = "unstable-stuck-detection")]
         this.stuck_detector.exit();
-        drop(span);
-        PARENT_SPAN.load().as_deref().and_then(|(_, _, groups)| {
-            let meta = crate::scope::meta();
-            let group = groups.get(&meta.group)?;
-            let mut gg = group.lock();
-            if gg.actors_count != 0 {
-                gg.actors_count -= 1;
+        if let Some(start) = start {
+            if let Some(tracer) = &*TRACE.load() {
+                let traces = tracer.traces.get_or_default();
+                traces.lock().push(TraceRecord {
+                    meta: crate::scope::meta(),
+                    start: start.as_nanos() as u64,
+                    end: tracer.now.elapsed().as_nanos() as u64,
+                });
             }
-            if gg.actors_count == 0 {
-                gg.span = None;
-            }
-            Some(())
-        });
+        }
+
         result
     }
 }
