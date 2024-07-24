@@ -361,8 +361,6 @@ where
                 let restarting_allowed = restart_policy.restarting_allowed(&new_status)
                     && !sv.control.read().stop_spawning;
 
-                actor.set_status(new_status);
-
                 restarting_allowed
                     .then(|| {
                         restart_policy
@@ -372,7 +370,7 @@ where
                     .flatten()
             };
 
-            let _ = if let Some(after) = restart_after {
+            let obj = if let Some(after) = restart_after {
                 if after == Duration::ZERO {
                     debug!("actor will be restarted immediately");
                 } else {
@@ -397,6 +395,8 @@ where
                 sv.objects.remove(&key).map(|(_, v)| v)
             }
             .expect("where is the current actor?");
+            let actor = obj.as_actor().expect("a supervisor stores only actors");
+            actor.set_status(new_status);
 
             // TODO: should we unregister the address right after failure?
             sv.context.book().remove(addr);
